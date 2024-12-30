@@ -1099,6 +1099,7 @@ kable(model_metrics)%>%
 可以視為評估網路成癮的參考
 
 ## 結論-Ordinal Logistic Regerssion
+
 ```{r}
 #| code-fold: true
 #| label: fig-Importance-variable-of-Ordinal-Logistics
@@ -1118,6 +1119,8 @@ importance_df <- data.frame(
 importance_df <- importance_df[order(-importance_df$AbsImportance), ]
 
 # 繪製圖表
+library(ggplot2)
+
 ggplot(importance_df, aes(x = reorder(Variable, AbsImportance), y = Importance)) +
   geom_bar(stat = "identity", aes(fill = Importance > 0), show.legend = FALSE) +
   coord_flip() +
@@ -1134,13 +1137,12 @@ ggplot(importance_df, aes(x = reorder(Variable, AbsImportance), y = Importance))
 
 特徵重要性前幾名為每日使用電腦與網路平均時數(PreInt_EduHx.computerinternet_hoursday)、性別(Basic_Demos.Sex)、活動水平(BIA_Activity_Level_num)
 
-表示在Ordinal Logistic Regerssion模型中這些變數是重要的
-
 其中，性別和活動水平是負相關，表示男性的網路成癮程度可能高於女性
 
 而活動水平越高，網路成癮程度傾向於降低
 
 ## 結論-Ordinal Forest
+
 ```{r}
 #| code-fold: true
 #| label: fig-Importance-vaariable-of-Ordinal-Forest
@@ -1191,6 +1193,7 @@ ggplot(var_importance_df, aes(x = reorder(Variable, Importance), y = Importance)
 年齡對預測結果的影響最大，其次是每日使用電腦與網絡的時間，最後是兒童睡眠障礙量表的總分
 
 ## 結論-CatBoost
+
 ```{r}
 #| code-fold: true
 #| label: fig-Feature-Importance
@@ -1212,6 +1215,7 @@ ggplot(feature_importances, aes(x = reorder(Feature, Importance), y = Importance
 ```
 
 ## 結論-CatBoost
+
 特徵重要性排名前三的變數為：兒童睡眠障礙量表標準化總分（SDS.SDS_Total_T）、年齡（Basic_Demos.Age）、每日使用電腦與網絡的平均時數（PreInt_EduHx.computerinternet_hoursday）
 
 這些特徵不僅在CatBoost 模型中顯示出高貢獻，也在Ordinal Forest是重要變數
@@ -1232,6 +1236,7 @@ ggplot(feature_importances, aes(x = reorder(Feature, Importance), y = Importance
 對目標變數的影響可能較大，可以視為評估網路成癮的參考
 
 # 工作分配
+
 ```{r}
 #| code-fold: true
 work_table <- data.frame(
@@ -1255,7 +1260,7 @@ plinary review. Journal of Big Data, 7(1), 94. https://doi.org/10.1186/s40537-02
 [3]https://www.w3computing.com/articles/using-catboost-for-categorical-feature
 handling-in-machine-learning/
 
-# 參考資料
+## 參考資料
 [4]https://www.youtube.com/watch?v=KXOTSkPL2X4
 
 [5]Hornung, R. (2017). Ordinal forests. Journal of Machine Learning Research, 18(159),
@@ -1265,9 +1270,13 @@ handling-in-machine-learning/
  UCLA: Statistical Consulting Group. https://stats.oarc.ucla.edu/r/dae/ordinal-logistic
 regression/
 
-# 參考資料
+## 參考資料
 [7]Cheng Hua, Dr. Youn-Jeng Choi, Qingzhou Shi. (2021). Binary logistic regression. In
  Advanced regression techniques. Retrieved from Binary Logistic Regression (Bookdown)
 
 [8]Shawn. (2024). 順序羅吉斯回歸 (Ordinal Logistic Regression)：介紹與解讀. Medium.
  Retrieved from Ordinal Logistic Regression 簡介與解讀
+ 
+## 本組資料
+
+https://github.com/H24101183/STATISTICAL-CONSULTING-FINAL-REPORT
