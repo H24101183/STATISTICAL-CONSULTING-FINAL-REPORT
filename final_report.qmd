@@ -1,0 +1,1190 @@
+---
+title: "Final report"
+subtitle: "網路成癮程度預測"
+date: today
+author: Group5(廖芷萱、詹雅鈞、李姿慧、謝沛恩、李敏榕)
+format:
+  pdf:
+    engine: xelatex
+    documentclass: article
+    geometry: "left=2cm, right=2cm, top=2cm, bottom=2cm, a4paper"  
+    fontsize: 12pt  
+    header-includes:
+      - \usepackage{xeCJK}
+      - \setCJKmainfont{Microsoft JhengHei UI}  
+      - \usepackage{caption}
+      - \usepackage{float}  
+      - \usepackage{placeins} 
+      - \captionsetup[figure]{font=small}
+      - \captionsetup[table]{font=small}
+      - \usepackage{setspace,relsize}
+      - \usepackage{geometry}
+      - \geometry{verbose,tmargin=2.5cm,bmargin=2.5cm,lmargin=2.5cm,rmargin=2.5cm}
+toc: true
+execute: 
+  cache: true
+  echo: false
+editor: 
+  markdown: 
+    wrap: 72
+number-sections: true
+---
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+  warning = FALSE,
+  message = FALSE,
+  fig.showtext = TRUE,
+  fig.align = "center"  # 這行可以將所有圖片置中
+)
+library(ggplot2)
+library(showtext)
+library(dplyr)
+library(missForest)
+library(readr)
+library(caret)
+library(mice)
+library(DataExplorer)
+library(psych)
+library(ordinalForest)
+library(Hmisc)
+library(MASS)
+library(knitr)
+library(kableExtra)
+library(devtools)
+library(Metrics)
+library(reshape2)
+library(cowplot)
+
+#install.packages('devtools',dependencies = T)
+library(devtools)
+options(devtools.install.args = c("--no-multiarch", "--no-test-load"))
+
+devtools::install_url('https://github.com/catboost/catboost/releases/download/v0.11.1/catboost-R-Windows-0.11.1.tgz', INSTALL_opts = c("--no-multiarch", "--no-test-load"))
+library(catboost)
+# 設定字體
+font_add("Microsoft JhengHei", "C:/Windows/Fonts/msjh.ttc")
+showtext_auto()
+```
+
+# 資料來源
+
+本研究所使用之資料來源為 Kaggle 競賽提供的 Healthy Brain Network (HBN)
+資料集。該資料集為一臨床樣本，包含3960名年齡介於 5 至 22
+歲的青少年，他們均接受過臨床及研究篩檢。資料集中包含以下兩類元素被納入分析範疇：(1)
+體能活動資料，包括腕戴式加速度計記錄、體能評估及問卷調查數據；(2)
+網路使用行為資料。
+
+# 目標與動機
+
+本研究旨在基於兒童和青少年的體能活動、身體測量、心理健康及網路行為等特徵，建立成癮嚴重程度(sii)的模型來預測參與者的網路成癮嚴重程度，為家庭及教育機構提供有針對性的建議，幫助減少過度使用網路的負面影響。
+
+```{r}
+#| warning: false
+train <- read.csv("train.csv", header = TRUE, sep = ",")
+```
+
+# 敘述統計
+
+```{r}
+#| output: asis
+latex(describe(train),file="")
+```
+
+## 資料描述
+
+本研究使用之訓練資料集包含 3960 筆樣本，共計 82 個變數。其中包含 59
+個解釋變數，主要分為以下類別：
+
+1.  參與者基本資料 (Demographics)
+2.  兒童全球評估量表 (Children's Global Assessment Scale)
+3.  身體量測 (Physical Measures)
+4.  健體測驗生命指標及跑步機測試 (FitnessGram Vitals and Treadmill)
+5.  兒童版健體測驗 (FitnessGram Child)
+6.  生物電阻抗分析 (Bio-electric Impedance Analysis)
+7.  身體活動問卷青少年版 (Physical Activity Questionnaire (Adolescents))
+8.  身體活動問卷兒童版 (Physical Activity Questionnaire (Children))
+9.  兒童睡眠障礙量表 (Sleep Disturbance Scale)
+10. 網絡使用時間 (Internet Use)
+
+研究之反應變數為 網絡成癮嚴重程度 (Severity Impairment Index,
+SII)，其定義基於父母評估孩子網路成癮程度的問卷 (Parent-Child Internet
+Addiction Test, PCIAT)，並以問卷總分 (PCIAT_Total)
+量化嚴重程度。該指數依據總分範圍將樣本分為四個層級：0 = 無 (None)、1 =
+輕度 (Mild)、2 = 中度 (Moderate)、3 = 重度 (Severe)。
+
+此外，資料集中有 22 個變數為問卷中的題目分數，分別對應 PCIAT
+問卷的各項評估指標。
+
+# 前處理
+
+## 檢視資料中反應變數與解釋變數的缺失值情況
+
+### 反應變數分析
+
+```{r}
+#| label: fig-Distribution-of-sii
+#| fig-cap: "Distribution of sii"
+#反應變數Sii
+ggplot(as.data.frame(table(train$sii)), aes(Var1, Freq)) +
+  geom_bar(stat = "identity", fill = "skyblue") +
+  labs(
+    x = "Category",
+    y = "Sample Size",
+    title = "Distribution of sii"
+  ) +
+  theme_minimal() +
+  theme(
+    plot.title = element_text(hjust = 0.5),
+    plot.margin = margin(40, 20, 40, 20)  # 增加下方的邊距，留出空間
+  )
+```
+如圖1所示，反應變數 網絡成癮嚴重程度 (Severity Impairment Index, SII)
+的分佈顯示出類別不平衡的現象。
+
+在所有樣本中，類別 0（無，None）占據了最大比例，共有 1594 個樣本；
+其次是類別 1（輕度，Mild），擁有 730 個樣本； 類別
+2（中度，Moderate）則有 378 個樣本； 而類別 3（重度，Severe）僅有
+34個樣本。
+
+此類別不平衡可能會對後續分析或模型訓練過程中的結果產生偏差，因此，為減少類別不平衡對模型的影響，我們將類別
+2（中度，Moderate）與類別 3（重度，Severe）合併為類別 2（中重度
+，Moderate-Severe）。
+
+```{r}
+
+train$sii <- ifelse(train$sii == 3, 2, train$sii)
+
+train$sii <- factor(train$sii, levels = c(0,1, 2) ,ordered = TRUE)
+```
+
+```{r}
+#| label: fig-Aftercom-Distribution-of-sii
+#| fig-cap: "After combination the distribution of sii"
+ggplot(as.data.frame(table(train$sii)), aes(Var1, Freq)) +
+  geom_bar(stat = "identity", fill = "darkblue") +
+  labs(
+    x = "Category",
+    y = "Sample Size",
+    title = "Distribution of sii"
+  ) +
+  theme_minimal() +
+  theme(
+    plot.title = element_text(hjust = 0.5),
+    plot.margin = margin(40, 20, 40, 20)  # 增加下方的邊距，留出空間
+  )
+
+```
+\FloatBarrier
+此處的調整(如圖2)有助於提升模型的穩定性並減少少數類別樣本數量對結果的過度影響。
+
+
+
+
+### 檢視遺失值
+```{r, fig.show="hide"}
+miss_plot<-plot_missing(train) + #原始資料遺失值
+  ggtitle("Feature's Missing Percentage") +  # 新增標題
+  theme(
+    plot.title = element_text(hjust = 0.5, size = 14, face = "bold"),  # 標題置中並設置樣式
+    plot.margin = margin(20, 20, 20, 20)  # 增加下方的邊距
+  )
+```
+
+```{r, fig.width = 10, fig.height = 8}
+#| label: fig-Missing-value-percentage-of-original-data
+#| fig-cap: "Missing value percentage of original data"
+
+miss_plot
+```
+\FloatBarrier
+本研究對數據集中的特徵進行了遺失值分析，結果如圖3所示。資料集中存在多個具有較高比例遺失值的變數，因此，為提高分析準確性，本研究將根據變數的含義及其與其他變數的相關性進行變數選擇。
+
+### 解釋變數相關係數矩陣
+
+```{r, fig.width = 10, fig.height = 8}
+#檢查Physical Measure相關性
+variables <- c(
+  "Physical.BMI","Physical.Height",
+  "Physical.Weight","Physical.Waist_Circumference",
+  "Physical.Diastolic_BP","Physical.HeartRate",
+  "Physical.Systolic_BP"
+)
+
+if (!all(variables %in% colnames(train))) {
+  stop("Some specified variables are not in the data frame.")
+}
+
+cor_matrix <- cor(train[variables], use = "complete.obs")
+cor_long <- melt(cor_matrix)
+```
+
+```{r, fig.width = 10, fig.height = 8}
+#| label: fig-Correlation-Heatmap-of-Physical-Variables
+#| fig-cap: "Correlation Heatmap of Physical Measure Variables"
+
+ggplot(data = cor_long, aes(x = Var1, y = Var2, fill = value)) +
+  geom_tile(color = "white") +
+  geom_text(aes(label = round(value, 2)), color = "black", size = 3) +
+  scale_fill_gradient2(low = "blue", high = "red", mid = "white",
+                       midpoint = 0, limit = c(-1, 1), space = "Lab",
+                       name = "Correlation") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust = 1)) +
+  labs(
+    title = "Correlation Heatmap of Physical Measure Variables",
+    x = "Variables",
+    y = "Variables"
+  )
+
+#檢查FitnessGram Child相關性
+variables <- c(
+  "FGC.FGC_CU", "FGC.FGC_CU_Zone",
+  "FGC.FGC_GSND", "FGC.FGC_GSND_Zone",
+  "FGC.FGC_GSD", "FGC.FGC_GSD_Zone",
+  "FGC.FGC_PU", "FGC.FGC_PU_Zone",
+  "FGC.FGC_SRL", "FGC.FGC_SRL_Zone",
+  "FGC.FGC_SRR", "FGC.FGC_SRR_Zone",
+  "FGC.FGC_TL", "FGC.FGC_TL_Zone"
+)
+
+if (!all(variables %in% colnames(train))) {
+  stop("Some specified variables are not in the data frame.")
+}
+
+cor_matrix <- cor(train[variables], use = "complete.obs")
+cor_long <- melt(cor_matrix)
+```
+\FloatBarrier
+```{r, fig.width = 10, fig.height = 8}
+#| label: fig-Correlation-Heatmap-of-Fitness-Variables
+#| fig-cap: "Correlation Heatmap of FitnessGram Variables"
+ggplot(data = cor_long, aes(x = Var1, y = Var2, fill = value)) +
+  geom_tile(color = "white") +
+  scale_fill_gradient2(low = "blue", high = "red", mid = "white",
+                       midpoint = 0, limit = c(-1, 1), space = "Lab",
+                       name = "Correlation") +
+  geom_text(aes(label = round(value, 2)), color = "black", size = 3) +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust = 1)) +
+  labs(
+    title = "Correlation Heatmap of FitnessGram Variables",
+    x = "Variables",
+    y = "Variables"
+  )
+
+##檢查Bio-electric Impedance Analysis相關性
+variables <- c(
+  "BIA.BIA_Activity_Level_num", "BIA.BIA_BMC", "BIA.BIA_BMI", "BIA.BIA_BMR",
+  "BIA.BIA_DEE", "BIA.BIA_ECW", "BIA.BIA_FFM", "BIA.BIA_FFMI",
+  "BIA.BIA_FMI", "BIA.BIA_Fat", "BIA.BIA_Frame_num", "BIA.BIA_ICW",
+  "BIA.BIA_LDM", "BIA.BIA_LST", "BIA.BIA_SMM", "BIA.BIA_TBW"
+)
+
+if (!all(variables %in% colnames(train))) {
+  stop("Some specified variables are not in the data frame.")
+}
+
+cor_matrix <- cor(train[variables], use = "complete.obs")
+cor_long <- melt(cor_matrix)
+```
+\FloatBarrier
+```{r, fig.width = 10, fig.height = 8}
+#| label: fig-Correlation-Heatmap
+#| fig-cap: "Correlation Heatmap  of Bio-electric Impedance Analysis"
+ggplot(data = cor_long, aes(x = Var1, y = Var2, fill = value)) +
+  geom_tile(color = "white") +
+  scale_fill_gradient2(low = "blue", high = "red", mid = "white",
+                       midpoint = 0, limit = c(-1, 1), space = "Lab",
+                       name = "Correlation") +
+  geom_text(aes(label = round(value, 2)), color = "black", size = 3) +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust = 1)) +
+  labs(
+    title = "Correlation Bio-electric Impedance Heatmap",
+    x = "Variables",
+    y = "Variables"
+  )
+```
+\FloatBarrier
+```{r, fig.width = 10, fig.height = 8}
+## 統計 PAQ_A 和 PAQ_C和 年齡
+PAQ_summary <- train %>%
+  group_by(Basic_Demos.Age) %>%
+  summarise(
+    PAQ_A_Filled = sum(!is.na(PAQ_A.PAQ_A_Total)),
+    PAQ_C_Filled = sum(!is.na(PAQ_C.PAQ_C_Total))
+  )
+
+PAQ_long <- reshape2::melt(PAQ_summary, id.vars = "Basic_Demos.Age",
+                           variable.name = "PAQ_Type",
+                           value.name = "Count")
+```
+
+```{r, fig.width = 10, fig.height = 8}
+#| label: fig-PAQ-Completion-by-Age
+#| fig-cap: "PAQ Completion by Age"
+ggplot(PAQ_long, aes(x = Basic_Demos.Age, y = Count, fill = PAQ_Type)) +
+  geom_bar(stat = "identity", position = "dodge") +
+  labs(
+    title = "PAQ Completion by Age",
+    x = "Age",
+    y = "Count",
+    fill = "PAQ Type"
+  ) +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+# 合併PAQ_A &PAQ_C
+train$PAQ_Total_Combined <- ifelse(
+  !is.na(train$PAQ_A.PAQ_A_Total) & !is.na(train$PAQ_C.PAQ_C_Total),
+  (train$PAQ_A.PAQ_A_Total + train$PAQ_C.PAQ_C_Total) / 2,  # 如果兩者都有值，取平均
+  ifelse(
+    !is.na(train$PAQ_A.PAQ_A_Total),
+    train$PAQ_A.PAQ_A_Total,  # 如果只有 PAQ_A.PAQ_A_Total 有值，取其值
+    ifelse(
+      !is.na(train$PAQ_C.PAQ_C_Total),
+      train$PAQ_C.PAQ_C_Total,  # 如果只有 PAQ_C.PAQ_C_Total 有值，取其值
+      NA  # 如果兩者都為 NA，則保持 NA
+    )
+  )
+)
+
+
+```
+\FloatBarrier
+本研究對資料中的解釋變數進行了篩選與處理，具體過程如下：
+
+首先，我們發現資料中的解釋變數分類均記錄了數據收集時的季節。由於這些變數對研究目標的重要性較低，因此將其刪除。隨後，在身體量測（Physical
+Measures）分類中，如圖4可見，身體質量指數（BMI）、身高（Height）、體重（Weight）及腰圍（Waist
+circumference）之間呈現高度相關（相關性 \>
+0.8）。為避免共線性問題並基於變數的重要性考量，刪除了身高（Height）、體重（Weight）及腰圍（Waist
+circumference）。
+
+在健體測驗生命指標及跑步機測試（FitnessGram Vitals and
+Treadmill）分類中，如圖3可見，跑步機的速度或傾斜度的最高階段（Maximum Stage
+Reached）、完成時間的分鐘（Time Mins）及完成時間的秒數（Time
+Sec）變數的遺失值比例均超過80%。考量到兒童版健體測驗（FitnessGram
+Child）已能充分反映兒童體能數據，刪除了上述三個變數。此外，兒童版健體測驗中的變數分為體能測試的實際得分（Total）及根據性別、年齡和體重計算的健康標準（Zone,
+1=Weak, 2=Normal,
+3=Strong）。最終僅保留健康標準（Zone）資料。此外，圖5中可了解到該分類中的坐姿體前屈左側測試（Sit
+& Reach Left）及坐姿體前屈右側測試（Sit & Reach
+Right）因缺失值比例達41%至42%，且兩者之間高度相關（相關性 \>
+0.7），為減少缺失值的影響，刪除了坐姿體前屈左側測試（Sit & Reach
+Left）。
+
+在生物電阻抗分析（Bio-electric Impedance
+Analysis）分類中，BMI變數與身體量測（Physical
+Measures）分類中的BMI重複，且其遺失值比例更高（49.72%），因此刪除。此外，圖6中可得知此分類中的骨礦物質含量（BMC）、基礎代謝率（BMR）、每日能量消耗（DEE）、細胞外水分（ECW）、去脂體重（FFM）、細胞內水分（ICW）、瘦體乾重（LDM）、瘦軟組織（LST）、骨骼肌質量（SMM）及總身體水分（TBW）之間存在極高度相關性（相關性
+\> 0.9）。基於變數的重要性，最終僅保留骨骼肌質量（SMM）。
+
+在身體活動問卷青少年版（Physical Activity Questionnaire
+(Adolescents)）及身體活動問卷兒童版（Physical Activity Questionnaire
+(Children)）中，青少年版適用於14-19歲的青少年，而兒童版適用於8-14歲的兒童。如圖7可見，兩者數據幾乎互斥，我們將其合併為一個變數；若數據同時來自兩個測驗，則取平均值，因兩者的評分方式一致。此外，資料集本身包含來自5至22歲青少年的數據，對於不在上述測驗涵蓋年齡層內的樣本，後續將進行缺失值插補。
+
+在兒童睡眠障礙量表（Sleep Disturbance Scale）中，變數分為原始分數（Raw
+Score）及標準化分數（Total
+T-Score）。基於標準化分數的解釋性更強，僅保留Total
+T-Score。最後，對於網絡使用時間（Internet
+Use）分類，未發現異常，故保留所有變數。
+
+上述處理步驟有效簡化了資料結構，減少了冗餘與噪音數據，從而提升了分析的準確性與科學性。
+
+```{r}
+# 根據變數含義選取變數
+selected<-c("Basic_Demos.Age", "Basic_Demos.Sex", "CGAS.CGAS_Score", "Physical.BMI", "Physical.Diastolic_BP", 
+  "Physical.HeartRate", "Physical.Systolic_BP", "FGC.FGC_CU_Zone", "FGC.FGC_GSND_Zone", 
+  "FGC.FGC_GSD_Zone", "FGC.FGC_PU_Zone", "FGC.FGC_SRR_Zone", "FGC.FGC_TL_Zone", 
+  "BIA.BIA_Activity_Level_num", "BIA.BIA_FFMI", "BIA.BIA_FMI", "BIA.BIA_Fat", 
+  "BIA.BIA_Frame_num", "BIA.BIA_SMM", "PAQ_Total_Combined", 
+  "SDS.SDS_Total_T", "PreInt_EduHx.computerinternet_hoursday", "sii")
+
+train <- train[,selected]
+```
+本研究最終選取22個解釋變數包括以下幾個分類及其具代表性的指標：
+
+1.  參與者基本資料（Basic Demographics）
+
+-   年齡（Age）
+-   性別（Sex）
+
+2.  兒童全球評估量表 （Children's Global Assessment Scale, CGAS）
+
+-   CGAS總分（CGAS_Score）
+
+3.  身體量測（Physical Measures）
+
+-   身體質量指數（BMI）
+-   舒張壓（Diastolic_BP）
+-   心率（HeartRate）
+-   收縮壓（Systolic_BP）
+
+3.  兒童版健體測驗（FitnessGram Zones）
+
+-   上肢力量（FGC_CU_Zone）
+-   通用肌耐力（FGC_GSND_Zone）
+-   全身肌耐力（FGC_GSD_Zone）
+-   上肢推舉力量（FGC_PU_Zone）
+-   坐姿體前屈右側（FGC_SRR_Zone）
+-   身體總力量（FGC_TL_Zone）
+
+4.  生物電阻抗分析（Bio-electric Impedance Analysis, BIA）
+
+-   活動水平（BIA_Activity_Level_num）
+-   去脂體質量指數（FFMI, Fat-Free Mass Index）
+-   脂肪質量指數（FMI, Fat Mass Index）
+-   體脂肪百分比（Fat）
+-   體型（Frame_num）
+-   骨骼肌質量（SMM, Skeletal Muscle Mass）
+
+5.  身體活動問卷（Physical Activity Questionnaire）
+
+-   合併後的總分（PAQ_Total_Combined）
+
+6.  兒童睡眠障礙量表（Sleep Disturbance Scale, SDS）
+
+-   標準化總分（SDS_Total_T）
+
+7.  網絡使用時間 (Internet Use)
+
+-   每日使用電腦與網絡的平均時數（PreInt_EduHx.computerinternet_hoursday）
+
+此外，本研究選取了1個反應變數，即網絡成癮嚴重程度（Severity Impairment
+Index, SII）。
+
+### 最終解釋變數遺失值分析
+
+```{r, fig.width = 10, fig.height = 8}
+#| label: fig-Missing-value-percentage-of-reduced-data
+#| fig-cap: "Missing value percentage of reduced data"
+miss_lot <- plot_missing(train) + #原始資料遺失值
+  ggtitle("Feature's Missing Percentage") +  # 新增標題
+  theme(
+    plot.title = element_text(hjust = 0.5, size = 14, face = "bold"),  # 標題置中並設置樣式
+    plot.margin = margin(20, 20, 20, 20)  # 增加下方的邊距
+  )
+
+```
+\FloatBarrier
+在圖8中，我們觀察到以下兩個變數：
+
+FGC.FGC_GSND_Zone：基於參試者的年齡和性別，非優勢手握力的測試結果被分類為不同的「健康適能區間」。
+FGC.FGC_GSD_Zone：基於參試者的年齡和性別，優勢手握力的測試結果被分類為不同的「健康適能區間」。
+由於以上兩個變數的缺失值比例均超過70%，考慮到過多的遺失值可能影響數據的有效性與分析結果的穩健性，故決定將其刪除。
+
+```{r}
+# 以上兩個變數缺失值大於70%，刪除
+train <- train[, !(names(train) %in% c("FGC.FGC_GSND_Zone", "FGC.FGC_GSD_Zone"))]
+```
+**處理遺失值**
+
+在遺失值處理過程中，我們首先對反應變數**網絡成癮嚴重程度（Severity
+Impairment Index,
+SII）**進行處理。為確保模型預測結果的準確性與可靠性，將所有含有該變數缺失值的資料刪除，從而避免遺失值對分析結果的影響。
+
+```{r}
+# 使用 filter() 去除 ssi 為 NA 的資料
+train <- train %>% filter(!is.na(sii))
+response <- "sii"
+
+if ("id" %in% names(train)) {
+  train <- train[, !names(train) %in% "id"]
+}
+
+
+zone_columns <- grep("Zone", names(train), value = TRUE)
+
+#有做因子轉換是train_clean
+all_vars <- setdiff(names(train), "sii")  # 排除目標變數 sii
+binary_vars <- c("Basic_Demos.Sex", zone_columns)
+categorical_vars <- c("PreInt_EduHx.computerinternet_hoursday","BIA.BIA_Frame_num","BIA.BIA_Activity_Level_num")  # 多類別變數
+factor_col <- c(binary_vars,categorical_vars) # 所有因子型變數
+continuous_vars <- setdiff(all_vars, factor_col)  # 剩下的就是連續變數
+
+train_clean <- train
+train_clean[factor_col] <- lapply(train_clean[factor_col], as.factor)
+#有順序的反應變數
+train_clean$sii <- factor(train_clean$sii, levels = c(0,1, 2), ordered = TRUE)
+str(train_clean) #前處理完
+```
+
+# 插補缺失值
+
+```{r}
+#| message: false
+#| output: false
+mice_train <- mice(train_clean, m = 5 ,maxit = 50, seed = 123)
+plot(mice_train)
+```
+其次，對於缺失值比例低於50%的變數，我們採用了多重插補方法（Multiple
+Imputation by Chained Equations,
+MICE）進行處理。該方法通過利用其他變數的信息進行迭代插補，生成合理的插補值，從而減少缺失值對分析結果的影響，提升數據的完整性與模型的準確性。
+
+在實際操作中，我們設置了多重插補的迭代次數（iteration）為50次，並生成了5個插補後的資料集。隨後，我們基於這5個資料集分別構建並運行模型進行預測，最終選擇預測表現最佳的資料集作為後續分析的基礎。
+
+# 模型訓練
+
+## Ordinal Logistic Regression
+
+有序邏輯斯迴歸用來處理反應變數為順序類別變數的資料，通常採用累積邏輯模型，其核心為一個類別的累積機率建模。
+
+$\text{logit}(P(Y \leq j)) = \log \left( \frac{P(Y \leq j)}{P(Y > j)} \right) = \alpha_j - \mathbf{x}^\top \boldsymbol{\beta}, \quad j = 1, 2, \ldots, J-1$
+
+適用條件：
+
+-   反應變數為順序類別變數
+-   解釋變數可以有連續和類別變數
+-   變數之間獨立、無多重共線性
+-   平行線假設(Parallel Lines
+    Assumption)：表示各個反應變數會服從平行的線性模型，即迴歸係數會一致，但截距項不同。
+    
+\begin{table}[ht]
+\centering
+Table 1: Comparison between Logistic Regression and Ordinal Logistic Regression
+\end{table}
+| 特性             | Logistic Regression                           | Ordinal Logistic Regression                                        |
+|------------------|---------------------------|---------------------------|
+| **資料型態**     | 適用於二元類別資料，例如：0/1、是/否          | 適用於有序類別資料，例如：低/中/高                                 |
+| **類別數量**     | 二元類別                                      | 多個有序類別                                                       |
+| **類別順序考量** | 忽略類別之間的順序關係                        | 考慮類別之間的順序                                                 |
+| **模型假設**     | 預測的log-odds為線性函數的形式                | 假設平行線和反應變數為順序變數                                     |
+| **解釋重點**     | 解釋單一類別相對於另一類別的機率 (Odds Ratio) | 解釋類別累積機率，或在不同閾值間的隱變數變化                       |
+| **模型輸出**     | 每個觀測值歸屬於某一類別的機率                | 預測每個觀測值落在某一類的累積機率                         |
+| **適用情境**     | 適用於二元分類問題，例如：是否患病 (是/否)    | 適用於有序類別問題，例如：滿意度 (不滿意/滿意/非常滿意)            |
+| **效能表現**     | 快速、適合處理大量二元分類問題                | 計算較複雜，適合處理類別數較多且有序的問題                         |
+| **實現方式**     | R 套件 `glm` 或 Python 套件 `statsmodels`     | R 套件 `MASS::polr` 或 Python 套件 `statsmodels` 的 `OrderedModel` |
+
+在進行預測前，先利用`with()`和`pool()`進行多重插捕資料集的參數估計值合併。其中可以利用fmi觀察插捕的效果好壞，利用`summary()`觀察模型的解釋性和參數推論。
+
+```{r}
+# 建模
+
+fit <- with(mice_train,polr(sii ~ Basic_Demos.Age + Basic_Demos.Sex + CGAS.CGAS_Score + Physical.BMI + Physical.Diastolic_BP + Physical.HeartRate + Physical.Systolic_BP + FGC.FGC_CU_Zone + FGC.FGC_PU_Zone + FGC.FGC_SRR_Zone + FGC.FGC_TL_Zone + BIA.BIA_Activity_Level_num + BIA.BIA_FFMI + BIA.BIA_FMI + BIA.BIA_Fat + BIA.BIA_Frame_num + BIA.BIA_SMM + PAQ_Total_Combined + SDS.SDS_Total_T + PreInt_EduHx.computerinternet_hoursday
+, Hess = TRUE))
+library(mice)
+pooled <- pool(fit) 
+pooled
+
+```
+先觀察插捕後的效果。FMI（Fraction of Missing
+Information）為衡量因資料缺失而導致的不確定性，它表示每個估計量中的總變異有多少來自於遺失值的插補過程，值介於0到1之間，越小越好。
+從fit有序邏輯斯迴歸模型結果可以看出有些變數的fmi還是有點偏高，像是BMI(Physical.BMI)、上肢推舉力量(FGC.FGC_PU_Zone)、身體總力量(FGC.FGC_TL_Zone)、去脂體質量指數(BIA.BIA_FFMI)、脂肪質量指數(BIA.BIA_FMI)、體型(BIA.BIA_Frame_num2)，大於0.5。
+
+```{r}
+summary(pooled)
+```
+模型結果以迴歸係數(estimate)、標準誤差(std.error)、統計量(statistic)、P-value呈現，可以得知年齡(Basic_Demos.Age)、心率(Physical.HeartRate)、體型(BIA.BIA_Frame_num2)、兒童睡眠障礙量表標準化總分(SDS.SDS_Total_T)、每日使用電腦與網絡的平均時數(PreInt_EduHx.computerinternet_hoursday)，這些變數在顯著水準為0.05下，為此模型的顯著變數，表示這些變數可能對網絡成癮嚴重程度(sii)有影響。
+而`0|1` : p \< 0.05 、 `1|2`門檻 : p \< 0.05
+，表示不同網絡成癮嚴重程度(sii)類別之間的分界點顯著，能有效區分不同類別。
+
+```{r}
+#| message: false
+#| warning: false
+# 初始化結果數據框
+# 初始化結果數據框
+results_list <- list()
+best_model <- NULL  # 保存最佳模型
+best_accuracy <- -Inf  # 保存最高準確率
+best_summary <- NULL  # 保存最佳模型摘要
+
+# 處理單一資料集的函數
+process_dataset <- function(data, iter) {
+  # 切分資料集 80% 訓練，20% 驗證
+  set.seed(123 + iter)  # 確保每次有不同的分割
+  train_idx <- createDataPartition(data$sii, p = 0.8, list = FALSE)
+  train_data <- data[train_idx, ]
+  valid_data <- data[-train_idx, ]
+  
+  # 建立有序羅吉斯回歸模型
+  ordinal_model <- polr(sii ~ ., data = train_data, Hess = TRUE) # 計算Hessian矩陣(估計標準誤)
+  Summary <- summary(ordinal_model)
+  
+  # 使用驗證集進行預測
+  predictions <- predict(ordinal_model, newdata = valid_data)
+  
+  # 創建混淆矩陣
+  confusion_matrix <- table(valid_data$sii, predictions)
+  
+  # 計算準確率
+  accuracy <- sum(diag(confusion_matrix)) / sum(confusion_matrix)
+  # 計算 Quadratic Weighted Kappa
+  kappa <- ScoreQuadraticWeightedKappa(as.numeric(valid_data$sii), as.numeric(predictions))
+  
+  # 返回結果
+  
+  list(Summary = Summary, Model = ordinal_model, Accuracy = accuracy, Quadratic_Weighted_Kappa = kappa)
+}
+
+# 對每個插補資料集進行處理
+for (i in 1:5) {
+  data <- complete(mice_train, i) # 提取第 i 個插補資料集
+  data$sii <- factor(data$sii, ordered = TRUE)
+  
+  # 執行模型訓練與驗證
+  result <- process_dataset(data, iter = i)
+  
+  # 保存結果
+  results_list[[i]] <- data.frame(Accuracy = result$Accuracy,Quadratic_Weighted_Kappa = result$Quadratic_Weighted_Kappa)
+  
+  # 更新最佳模型
+  if (result$Accuracy > best_accuracy) {
+    best_accuracy <- result$Accuracy
+    best_model <- result$Model
+    best_summary <- result$Summary
+  }
+
+}
+
+# 合併結果並計算平均
+results <- do.call(rbind, results_list)
+final_results1 <- colMeans(results)
+names(final_results1) <- c("Accuracy", "Quadratic Weighted Kappa")
+
+```
+
+```{r}
+#| label: tbl-result-ordinallogit
+#| tbl-cap: "Result of Ordinal Logistic Regression"
+
+# 輸出結果
+kable(final_results1)
+
+```
+利用多重插捕五個資料集進行建模預測，把驗證集放入模型做測試，可以得到平均準確率為62.08%(表2)，還算可以接受，但也沒有達到不錯的表現。平均QWK
+值為 0.357，表示模型對有序分類的預測有效果，但一致性不高。
+
+
+```{r}
+#| label: fig-Importance-variable-of-Ordinal-Logistics
+#| fig-cap: "Importance variable of Ordinal Logistics"
+
+# 提取變數重要性（係數的絕對值）
+importance <- abs(best_model$coefficients)
+importance_df <- data.frame(
+  Variable = names(importance),
+  Importance = importance
+)
+
+# 排序變數
+importance_df <- importance_df[order(-importance_df$Importance), ]
+
+# 繪製圖表
+ggplot(importance_df, aes(x = reorder(Variable, Importance), y = Importance)) +
+  geom_bar(stat = "identity", fill = "skyblue") +
+  coord_flip() +
+  labs(
+    title = "Variable Importance",
+    x = "Variables",
+    y = "Importance (Absolute Coefficient)"
+  ) +
+  theme_minimal()
+```
+從圖9 觀察Ordinal Logistic
+Regerssion模型中的特徵重要性，特徵重要性前幾名為每日使用電腦與網路平均時數(PreInt_EduHx.computerinternet_hoursday)、性別(Basic_Demos.Sex)、活動水平(BIA_Activity_Level_num)，表示在Ordinal
+Logistic Regerssion模型中這些變數是重要的。其中，性別和活動水平是負相關，表示男性的網路成癮程度可能高於女性，而活動水平越高，網路成癮程度傾向於降低。
+
+## Ordinal Forest
+
+Ordinal Forest 是一種 隨機森林 演算法的變體，專門用來處理 有序類別變數
+的預測問題。將數據中的類別（例如：低、中、高）視為具有順序的數值，並在建模時利用這種順序資訊來提高預測準確率。
+
+工作原理:
+
+-   建立分數集： 首先，會建立多個分數集。對於每個分數集，會先從
+    Uniform(0,1) 分佈中隨機抽取 J-1 個值（其中 J 是類別的數量）。
+    這些值會被排序，並定義為區間邊界。
+    然後，將每個類別值替換為其對應區間中點的逆標準常態分佈函數 (Φ−1)。
+    這個過程會產生一個連續變數，用於訓練回歸森林。
+
+-   生成回歸森林：
+    使用新建立的連續變數作為反映變數，並使用原始的解釋變數，會建立一個回歸森林。
+
+-   評估森林效能： 根據其袋外（OOB）預測效能，使用效能函數 *g*
+    來評估每個森林的效能。先將預測的連續變數轉換回原始的類別值，然後再評估預測的準確性。
+    效能函數 g
+    可以根據不同的需求進行選擇，例如：希望每個類別的預測準確度相同，或者希望正確分類的樣本數量最多。
+
+-   選擇最佳森林和建立優化的分數集：
+    選擇具有最高效能分數的預先定義數量的森林。
+    然後，通過平均這些選定森林中的分數集來計算優化的分數集。
+
+-   訓練最終的回歸森林：
+    使用優化的分數集和原始的解釋變數來訓練最終的回歸森林。
+    這個最終的森林用於預測新的觀察結果。
+
+序數森林通過嘗試許多不同的分數集，並選擇在預測原始序數反應變數方面表現最佳的分數集，以迭代的方式找到最佳的連續表示法。
+\begin{table}[ht]
+\centering
+Table 3: Comparison between Random Forest and Ordinal Forest
+\end{table}
+
+
+| 特性                   | 普通隨機森林 (Random Forest)                                 | 有序森林 (Ordinal Forest)                            |
+|------------------|---------------------------|---------------------------|
+| **資料型態**           | 適用於類別型 (分類) 或數值型 (迴歸) 資料                     | 專為處理有序類別資料設計，例如 "低"、"中"、"高"      |
+| **類別順序考量**       | 忽略類別之間的順序關係                                       | 考慮類別之間的順序關係，避免預測結果與真實值相差過遠 |
+| **分裂準則**           | 以資訊增益 (Information Gain) 或基尼係數 (Gini Index) 為基準 | 使用順序敏感的分裂準則，優化有序類別的預測           |
+| **適用情境**           | 適用於所有類別型問題，例如是否患病 (是/否)                   | 適用於有序類別問題，例如風險分級 (低/中/高)          |
+| **模型輸出**           | 類別標籤或數值預測                                           | 類別標籤，並確保輸出順序的合理性                     |
+| **誤差懲罰**           | 預測錯誤時，無法區分「小錯誤」與「大錯誤」                   | 預測錯誤時，較大懲罰遠離真實值的錯誤                 |
+| **特徵重要性**         | 提供變數重要性評估，例如基於分裂次數                         | 提供有序資料的變數重要性評估                         |
+| **對類別不平衡的處理** | 支援權重調整或重新取樣 (Resampling)                          | 同樣支援權重調整或重新取樣，並針對小樣本類別提供改進 |
+| **效能表現**           | 快速、靈活，適合大規模資料                                   | 效能較高，但計算量稍多於普通隨機森林                 |
+| **實現方式**           | R 套件 `randomForest` 或 Python 套件 `scikit-learn`          | R 套件 `ordfor`                                      |
+
+```{r}
+#| cache: TRUE
+# 初始化結果數據框
+results_list <- list()
+
+# 處理單一資料集的函數
+process_dataset <- function(data, iter) {
+  # 切分資料集 80% 訓練，20% 驗證
+  set.seed(123 + iter)  # 確保每次有不同的分割
+  train_idx <- createDataPartition(data$sii, p = 0.8, list = FALSE)
+  train_data <- data[train_idx, ]
+  valid_data <- data[-train_idx, ]
+  
+  # 訓練 Ordinal Forest 模型
+  class_freq <- table(train_data$sii)
+  class_weights <- 1 / class_freq
+  
+  of_model <- ordfor(
+    depvar = "sii",
+    data = train_data,
+    nsets = 1000,
+    ntreeperdiv = 100,
+    ntreefinal = 500,
+    perffunction = "proportional",
+    classweights = class_weights
+  )
+  
+  # 使用驗證集進行預測
+  predictions <- predict(of_model, newdata = valid_data)$ypred
+  # 創建混淆矩陣
+  confusion_matrix <- table(valid_data$sii, predictions)
+  
+  # 計算準確率
+  accuracy <- sum(diag(confusion_matrix)) / sum(confusion_matrix)
+  # 計算 Quadratic Weighted Kappa
+  kappa <- ScoreQuadraticWeightedKappa(as.numeric(valid_data$sii), as.numeric(predictions))
+  
+  # 返回結果
+  return(data.frame(Accuracy = accuracy, Quadratic_Weighted_Kappa = kappa))
+}
+
+# 對每個插補資料集進行處理
+for (i in 1:5) {
+  data <- complete(mice_train, i) # 提取第 i 個插補資料集
+
+  # 執行模型訓練與驗證，保存結果
+  results_list[[i]] <- process_dataset(data, iter = i)
+}
+
+# 合併結果並計算平均
+results <- do.call(rbind, results_list)
+final_results2 <- colMeans(results)
+names(final_results2) <- c("Accuracy", "Quadratic Weighted Kappa")
+
+```
+**參數設置**
+
+-   classweights
+    是用來為每個類別賦予不同的權重，當類別不平衡時，為了減少多數類別對模型的影響，可以給少數類別賦予更高的權重。
+
+-   perffunction 是設定模型的性能評估方式，用於選擇最佳特徵組合。
+
+設定perffunction為"proportional"指的是在 Ordinal Forest
+演算法中，使用gclprop效能函數來評估每個森林的效能。
+
+gclprop函數會根據每個類別的樣本數量比例來設定權重，優先考慮較大類別的預測準確度。
+
+也就是說，模型會更重視將較多樣本的類別預測正確，而較小類別的預測準確度則可能較低。
+
+以下是 gclprop 函數的公式：
+
+$$
+gclprop(y, \hat{y}) = \sum_{j=1}^J \left( \frac{\#\{y_i = j : i \in \{1, \ldots, n\}\}}{n} \cdot Yind(y, \hat{y}, j) \right)
+$$
+其中：
+
+-   $\#\{y_i = j : i \in \{1, \ldots, n\}\}$ 表示屬於類別 $j$
+    的樣本數量。
+-   $n$ 表示總樣本數量。
+-   $Yind(y, \hat{y}, j)$ 表示類別 $j$ 的 Youden 指數，用於衡量類別 $j$
+    的預測準確度。
+
+使用
+gclprop函數時，模型會傾向於將樣本預測到樣本數量較多的類別，以最大化整體的預測準確度。
+然而，這也意味著較小類別的預測準確度可能會受到影響。
+
+```{r}
+#| label: tbl-result-ordinalforest
+#| tbl-cap: "Result of Ordinal Forest"
+# 輸出結果
+kable(final_results2)
+```
+整體效能(表4)：
+
+-   準確率 (Accuracy)：60.51%
+    表示模型對目標變數的預測中有超過一半是正確的，但這可能不足以滿足高準確性的需求，特別是如果應用場景需要非常準確的分類。
+
+-   Quadratic Weighted Kappa (QWK)： QWK 值為
+    0.329，表示模型對有序分類的預測有一定效果，但一致性並不高。 (QWK=0
+    表示隨機預測)。QWK特別適用於有序類別資料，它會根據類別之間的相對距離進行評估。此低分數表示模型在區分不同類別時未能充分考慮類別順序。
+
+```{r}
+# 找出準確率最高的插補資料集索引
+best_dataset_index <- which.max(sapply(results_list, function(x) x$Accuracy))
+
+# 提取最佳插補資料集
+best_data <- complete(mice_train, best_dataset_index)
+
+# 對最佳資料集進行訓練
+class_freq <- table(best_data$sii)
+class_weights <- 1 / class_freq
+
+best_model <- ordfor(
+  depvar = "sii",
+  data = best_data,
+  nsets = 1000,
+  ntreeperdiv = 100,
+  ntreefinal = 500,
+  perffunction = "proportional",
+  classweights = class_weights
+)
+
+# 提取變數重要性
+var_importance <- best_model$varimp
+
+# 繪製變數重要性圖
+var_importance_df <- data.frame(
+  Variable = names(var_importance),
+  Importance = var_importance
+)
+```
+
+```{r}
+#| label: fig-Importance-vaariable-of-Ordinal-Forest
+#| fig-cap: "Importance variable of Ordinal Forest"
+ggplot(var_importance_df, aes(x = reorder(Variable, Importance), y = Importance)) +
+  geom_bar(stat = "identity", fill = "steelblue") +
+  coord_flip() +
+  labs(
+    title = "Variable Importance Plot",
+    x = "Variables",
+    y = "Importance"
+  ) +
+  theme_minimal()
+```
+在Ordinal
+Forest模型中，特徵重要性通過評估每個特徵對於模型預測的貢獻度來進行排名。根據該模型的分析(圖10)，特徵重要性排名前三的變數為：年齡（Basic_Demos.Age）、每日使用電腦與網絡的平均時數（PreInt_EduHx.computerinternet_hoursday）以及兒童睡眠障礙量表標準化總分（SDS.SDS_Total_T）。這表明，在此分析中，年齡對預測結果的影響最大，其次是每日使用電腦與網絡的時間，最後是兒童睡眠障礙量表的總分，這些變數在模型的預測中扮演著關鍵角色。
+
+## CatBoost
+
+CatBoost 是一種基於梯度提升 (Gradient Boosting)
+的機器學習方法，專為處理分類特徵而設計，此方法提出了有序目標編碼（Ordered
+Target Encoding）的來避免資料洩漏(data leakage)，並有效提升模型的表現。
+
+### Ordered Target Encoding
+
+Ordered Target
+Encoding首先根據樣本的順序對數據進行排序，確保每個樣本的編碼只會參考之前的樣本，而不會使用未來樣本的目標變數資訊。
+
+對於每個類別特徵的每個樣本，此方法計算它與之前所有相同類別值的目標變數的加權平均值，為了避免在少數樣本的情況下出現極端的編碼值，過程引入了平滑參數（$a$），以減少少數樣本對編碼值的影響，從而避免過度擬合。
+
+計算公式為：
+
+$$
+\hat{x}_k^i = \frac{\sum_{j=1}^{i-1} \mathbb{I}(x_{\sigma_j,k} = x_{\sigma_i,k}) \cdot y_{\sigma_j} + a \cdot p}{\sum_{j=1}^{i-1} \mathbb{I}(x_{\sigma_j,k} = x_{\sigma_i,k}) + a}
+$$
+其中，$x_{\sigma_j,k}$ 表示第 $j$ 個樣本在類別特徵 $k$
+上的取值，$x_{\sigma_i,k}$ 表示第 $i$ 個樣本在類別特徵 $k$
+上的取值，$\mathbb{I}(\cdot)$ 是指示函數，當條件成立時其值為 1，否則為
+0，$y_{\sigma_j}$ 是第 $j$ 個樣本的目標變數值，$a$ 是平滑參數，$p$
+是全局目標變數均值，即所有樣本目標變數的平均值。
+
+將原本的類別特徵換成計算出的編碼值，使模型能夠使用數值特徵進行訓練。這樣的編碼方法減少了資訊洩漏，並提升模型的穩定性和泛化能力。
+
+\begin{table}[ht]
+\centering
+Table 5: Comparison between Ordered Target Encoding and Other Encoding Methods
+\end{table}
+
+| 方法                    | 優點                                         | 缺點                                             | 適用情況               |
+|------------------|------------------|------------------|-------------------|
+| Ordered Target Encoding | 防止資訊洩漏（Target Leakage），提高泛化能力 | 計算較為複雜；需要大量數據支持                   | 類別特徵較多、數據量大 |
+| Target Encoding         | 簡單、高效率                                 | 容易出現資訊洩漏）、需處理極端值與樣本不均的問題 | 類別變數較少           |
+| One-Hot Encoding        | 易於理解、編碼時無需計算                     | 類別數量過多時，會導致特徵維度爆炸，增加計算量   | 類別數量少，特徵較簡單 |
+
+### CatBoost模型建構
+
+為了增強穩健性，CatBoost會多次進行隨機排列並進行計算，且會以貪婪方式選擇特徵組合，通過結合有用的特徵來擴展特徵空間，提升模型的預測能力。CatBoost使用Oblivious
+Tree預測，通過梯度提升方法最小化損失函數，以達到最佳預測效果。其中Oblivious
+Tree同一層的所有節點使用相同的分割條件，這種結構有助於減少過擬合風險，並提高模型的穩定性。
+
+解決資料不平衡問題，避免多數類別影響資料:
+
+本研究通過計算每個類別的標記次數 (class_counts)，
+能夠識別資料集中的類別分佈，特別是少數類別和多數類別之間的比例。透過反向比例計算，CatBoost
+為每個類別分配權重
+(class_weights)，這樣少數類別的權重會較高，使模型在訓練過程中能夠更加關注少數類別，減少多數類別的影響。
+
+```{r}
+cat_boost <- function(train_data, valid_data) {
+  # 確保 train_data 和 valid_data 是 data.frame
+  train_data <- as.data.frame(train_data)
+  valid_data <- as.data.frame(valid_data)
+
+  # 準備數據
+  train_pool <- catboost.load_pool(
+    data = dplyr::select(train_data, -sii),  # 使用 dplyr 的 select 來刪除 sii 列
+    label = as.numeric(as.character(train_data$sii))
+  )
+  test_pool <- catboost.load_pool(
+    data = dplyr::select(valid_data, -sii),,  # 同樣處理 valid_data
+    label = as.numeric(as.character(valid_data$sii))
+  )
+
+
+  # 設置固定的超參數
+  params <- list(
+    loss_function = "MultiClass",
+    learning_rate = 0.01,
+    logging_level = "Silent",
+    depth = 10,
+    iterations = 1000,
+    l2_leaf_reg = 3.0,
+    bagging_temperature = 1.0,
+    class_weights = as.numeric(1 / table(train_data$sii))
+  )
+
+  # 訓練模型
+  model <- catboost.train(learn_pool = train_pool, params = params)
+
+  # 預測
+  predictions <- catboost.predict(model, test_pool, prediction_type = "Class")
+
+  # 計算 Quadratic Weighted Kappa
+  qwk <- ScoreQuadraticWeightedKappa(as.numeric(valid_data$sii), predictions)
+
+  # 創建混淆矩陣
+  confusion_matrix <- table(valid_data$sii, predictions)
+
+  # 計算準確率
+  accuracy <- sum(diag(confusion_matrix)) / sum(confusion_matrix)
+
+  return(list(
+    params = params,
+    qwk = qwk,
+    accuracy = round(accuracy, 4)
+  ))
+}
+```
+
+```{r}
+#| cache: TRUE
+library(catboost)
+result <- list()
+for (i in 1:5) {
+  data <- complete(mice_train, i) # 提取第 i 個插補資料集
+  set.seed(123 + i)  # 確保每次有不同的分割
+  train_idx <- createDataPartition(data$sii, p = 0.8, list = FALSE)
+  train_data <- data[train_idx, ]
+  valid_data <- data[-train_idx, ]
+ 
+  result[[i]] <- cat_boost(train_data, valid_data)
+}
+```
+
+```{r}
+#| label: tbl-result-Catboost
+#| tbl-cap: "Result of Catboost"
+# 比較 5 個模型的結果，計算平均準確率和平均 QWK
+average_accuracy <- mean(sapply(result, function(x) x$accuracy))
+average_qwk <- mean(sapply(result, function(x) x$qwk))
+# 建立 data.frame
+summary_df <- data.frame(
+  Evaluation = c("Accuracy", "Quadratic Weighted Kappa"),
+  Average = c(round(average_accuracy, 4), round(average_qwk, 4))
+)
+
+# 使用 kable() 輸出表格
+kable(summary_df)
+```
+根據比較五個模型的結果(表6)，平均準確率為 57.44%，準確率較低，平均
+Quadratic Weighted Kappa (QWK) 值為
+0.2645，顯示模型在處理有序分類時的一致性較差，意味著模型未能充分考慮類別間的順序關係，預測效果有限。這些結果表明，模型可能需要通過調整學習率、迭代次數與樹的深度等參數，以提升模型的準確性和穩定性。
+
+```{r}
+# 比較 5 個模型的結果，找出最佳的插補數據集
+best_imputation <- which.max(sapply(result, function(x) x$qwk))
+cat("Best imputation dataset:", best_imputation, "\n")#Best imputation dataset: 4 
+```
+
+```{r}
+# 使用最佳的插補數據集重新訓練模型
+best_data <- complete(mice_train, best_imputation)
+best_data$sii <- factor(best_data$sii, ordered = TRUE)
+
+# 分割數據
+set.seed(123 + best_imputation)
+train_idx <- createDataPartition(best_data$sii, p = 0.8, list = FALSE)
+train_data <- best_data[train_idx, ]
+valid_data <- best_data[-train_idx, ]
+
+# 準備數據
+train_pool <- catboost.load_pool(
+  data = train_data[, -which(names(train_data) == "sii")],
+  label = as.numeric(as.character(train_data$sii))
+)
+
+# 使用固定參數訓練最終模型
+final_params <- list(
+  loss_function = "MultiClass",
+  learning_rate = 0.01,
+  depth = 10,
+  iterations = 1000,
+  l2_leaf_reg = 3.0,
+  bagging_temperature = 1.0,
+  logging_level ="Silent",
+  class_weights = as.numeric(1 / table(train_data$sii))
+)
+
+final_model <- catboost.train(learn_pool = train_pool, params = final_params)
+
+# 構建測試集 Pool
+test_pool <- catboost.load_pool(
+  data  = valid_data[, !names(valid_data) %in% "sii"],
+  label = as.numeric(as.character(valid_data$sii))
+)
+
+# 在測試集上進行預測
+test_predictions <- catboost.predict(
+  final_model,
+  test_pool,
+  prediction_type = "Class"
+)
+
+# 將預測結果轉為數值型態
+test_predictions <- as.numeric(as.character(test_predictions))
+
+# 真實標籤
+test_true_labels <- as.numeric(as.character(valid_data$sii))
+
+library(Metrics)
+
+
+# 創建混淆矩陣
+test_confusion_matrix <- table(valid_data$sii, test_predictions)
+cat("Confusion Matrix on Test Set:\n")
+print(test_confusion_matrix)
+```
+從表現最佳的模型之混淆矩陣來看，模型在類別0和類別2之間的誤分類較為嚴重，尤其是類別0常被誤分為類別2，類別1則常被誤分為類別2。這表示類別1和類別2之間的區別較為模糊，可能是特徵重疊所致。
+
+```{r}
+# 計算準確率
+#test_accuracy <- sum(diag(test_confusion_matrix)) / sum(test_confusion_matrix)
+#cat("Accuracy on Test Set:", round(test_accuracy, 4), "\n")
+```
+特徵重要性(基於CatBoost模型在構建過程中使用該特徵進行分裂的頻率及貢獻)
+
+```{r}
+# 整理數據
+feature_importances <- data.frame(
+  Feature = rownames(final_model$feature_importances),
+  Importance = final_model$feature_importances[, 1]
+)
+
+# 排序
+feature_importances <- feature_importances[order(-feature_importances$Importance), ]
+```
+
+```{r}
+#| label: fig-Feature-Importance
+#| fig-cap: "Importance variable of CatBoost"
+# 繪製條形圖
+ggplot(feature_importances, aes(x = reorder(Feature, Importance), y = Importance)) +
+  geom_bar(stat = "identity") +
+  coord_flip() +
+  labs(title = "Feature Importance", x = "Feature", y = "Importance")
+
+```
+在 CatBoost
+模型中，特徵重要性通過計算特徵在建樹過程中分裂節點的頻率和貢獻來評估，根據
+CatBoost
+模型的分析，(圖11)特徵重要性排名前三的變數為：兒童睡眠障礙量表標準化總分（SDS.SDS_Total_T）、年齡（Basic_Demos.Age）以及每日使用電腦與網絡的平均時數（PreInt_EduHx.computerinternet_hoursday）。這些特徵不僅在
+CatBoost 模型中顯示出高貢獻，也在Ordinal Forest是重要變數，也在 Ordinal
+Logistic
+Regression模型中被證明是顯著的變數，顯示它們對預測目標變數具有重要的影響力。因此，雖然未能達到很好的預測效果，此結果暗示這些變數對目標變數的影響可能較大，因此可以視為評估網路成癮的參考變數。
+
+# 結論
+
+```{r}
+#| label: tbl-result-all
+#| tbl-cap: "Result of All Model"
+
+qwk_score1 <- final_results1[2]
+accuracy1 <- final_results1[1]
+qwk_score2 <- final_results2[2]
+accuracy2 <- final_results2[1]
+# Store model metrics
+model_metrics <- data.frame(
+ Model = c("Ordinal Logistic Regression", "Ordinal Forest", "CatBoost"),
+ Kappa = c(qwk_score1, qwk_score2, round(average_qwk, 4)),
+ Accuracy = c(accuracy1, accuracy2, round(average_accuracy, 4))
+)
+
+kable(model_metrics)
+```
+根據模型評估結果(表7)，Ordinal Logistic Regression 的準確率為
+0.6209，Kappa 值為 0.3572，顯示其在預測準確性上表現較好，Ordinal
+Forest的準確率為 0.6051，Kappa 值為 0.3209，表現略遜色於 Ordinal
+Logistic Regression，但仍能提供相對穩定的預測結果。CatBoost
+準確率（0.5744）， Kappa 值(0.2645)
+都不高，表現較其他兩個模型弱。總體來看，Ordinal Logistic Regression
+在此次序行類別資料中表現最好，是處理此分類問題的最佳選擇。
+
+綜合三個模型，可以推測每日使用電腦與網絡的平均時數（PreInt_EduHx.computerinternet_hoursday）、年齡（Basic_Demos.Age）、兒童睡眠障礙量表標準化總分（SDS.SDS_Total_T）、性別(basic_demos.sex)對目標變數的影響可能較大，可以視為評估網路成癮的參考。
+
+# 工作分配
+
+\begin{table}[ht]
+\centering
+Table 8: Work Assignment Table
+\end{table}
+
+| **負責人** | **工作項目**                                 |
+|------------|----------------------------------------------|
+| 廖芷萱     | 資料描述、資料前處理、口頭報告、書面報告製作 |
+| 詹雅鈞     | 資料前處理、CatBoost、書面報告製作           |
+| 李姿慧     | 資料前處理、Ordinal Forest、書面報告製作     |
+| 謝沛恩     | Ordinal Logistic Regression、書面報告製作    |
+| 李敏榕     | 資料描述、簡報製作                           |
+
+# 參考資料
+
+\[1\]Hancock, J. T., & Khoshgoftaar, T. M. (2020). CatBoost for big
+data: an interdisciplinary review. Journal of Big Data, 7(1), 94.
+https://doi.org/10.1186/s40537-020-00369-8
+
+\[2\]J. K. Sayyad, K. Attarde and N. Saadouli(2024), "Optimizing
+e-Commerce Supply Chains With Categorical Boosting: A Predictive
+Modeling Framework," in IEEE Access, vol. 12, pp. 134549-134567, 2024,
+doi: 10.1109/ACCESS.2024.3447756
+
+\[3\]https://www.w3computing.com/articles/using-catboost-for-categorical-feature-handling-in-machine-learning/
+
+\[4\]https://www.youtube.com/watch?v=KXOTSkPL2X4
+
+\[5\]Hornung, R. (2017). Ordinal forests. Journal of Machine Learning
+Research, 18(159), 1--25.
+
+\[6\]Institute for Digital Research and Education. (n.d.). Ordinal logistic regression in R. UCLA: Statistical Consulting Group. https://stats.oarc.ucla.edu/r/dae/ordinal-logistic-regression/
+
+\[7\]Cheng Hua, Dr. Youn-Jeng Choi, Qingzhou Shi. (2021). Binary logistic regression. In Advanced regression techniques. Retrieved from [Binary Logistic Regression (Bookdown)](https://bookdown.org/chua/ber642_advanced_regression/binary-logistic-regression.html)
+
+
+\[8\]Shawn. (2024). 順序羅吉斯回歸 (Ordinal Logistic Regression)：介紹與解讀. Medium. Retrieved from [Ordinal Logistic Regression 簡介與解讀](https://medium.com/@shawn678965/%E9%A0%86%E5%BA%8F%E7%BE%85%E5%90%89%E6%96%AF%E5%9B%9E%E6%AD%B8-ordinal-logistic-regression-%E4%BB%8B%E7%B4%B9%E8%88%87%E8%A7%A3%E8%AE%80-0ccf56b1ce35)
+
